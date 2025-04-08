@@ -1,0 +1,116 @@
+### 系統架構圖
+1. A[岸上電源 48V 30A] -->|零浮力主電纜 10AWG×2| B[水面中繼箱]
+   B -->|電力載波耦合| C[水下電子艙]
+   C -->|信號電纜 24AWG×4| D[傳感器網絡]
+   C -->|MOT-P75 水密接頭| E[推進系統]
+   D -->|I2C| E[MS5837 深度傳感器]
+   D -->|PWM| F[ZTW 60A ESC]
+   F --> G[T200 推進器 ×6]
+
+---
+
+### 關鍵硬體模組說明
+
+| 模組         | 型號/參數                     | 接口特性                     |
+|--------------|------------------------------|-----------------------------|
+| 上位機       | 樹莓派 5 (RP1)               | 雙千兆以太網 (USB3.0 轉接)  |
+| 下位控制器   | Arduino Due (ATSAM3X8E)      | 4×硬體串口 (RS485-TTL 轉換) |
+| 電力載波模組 | ST7540 FSK 調製器            | 600V 耐壓 / 50kbps 帶寬     |
+| 深度傳感器   | MS5837-30BA                  | I2C@400kHz / 24bit 解析度   |
+| 水密接插件   | MOT-P75-170PLUG              | 75mm 直徑 / 17針 / 300bar 耐壓 |
+| 電調         | ZTW Shark Marine 60A SBEC    | 6S 鋰電 / PWM 輸入 50-400Hz |
+| 電纜         | 主電纜 10AWG×2               | 信號電纜 24AWG×4            |
+
+---
+
+### 系統啟動流程
+
+1. **啟動 Arduino 通訊**：
+   ```bash
+   ros2 run rosserial_arduino serial_node.py _port:=/dev/ttyACM0 _baud:=57600
+
+以下是重新排版後的內容，讓結構更清晰易讀：
+
+---
+
+### IMU 驅動設置（樹莓派端）
+
+1. **安裝 IMU 驅動套件**  
+   - 安裝 RTIMULib（支援多種 9 軸 IMU）：
+     ```bash
+     sudo apt-get install cmake
+     git clone https://github.com/RoboticArts/RTIMULib2.git
+     cd RTIMULib2/Linux/build
+     cmake ..
+     make -j4
+     sudo make install
+     ```
+
+2. **啟動 IMU ROS 驅動節點**  
+   - 使用以下指令啟動：
+     ```bash
+     ros2 run imu_driver imu_node _calibration_file:=/path/to/RTIMULib.ini
+     ```
+
+---
+
+### 系統啟動流程
+
+1. **啟動 Arduino 通訊**：
+   ```bash
+   ros2 run rosserial_arduino serial_node.py _port:=/dev/ttyACM0 _baud:=57600
+   ```
+
+2. **啟動 IMU 節點**：
+   ```bash
+   ros2 launch imu_driver imu.launch.py
+   ```
+
+3. **啟動主控制節點**：
+   ```bash
+   ros2 launch rov_control control.launch.py
+   ```
+
+---
+
+### 關鍵優勢與注意事項
+
+#### **優勢分析**
+1. **分層架構**：
+   - 樹莓派專注高階算法。
+   - Arduino 確保 PWM 時序精度。
+
+2. **實時性能提升**：
+   - Arduino 的硬體 PWM 輸出更穩定。
+   - 避免樹莓派因系統延遲影響控制。
+
+3. **擴展性**：
+   - 可輕鬆添加更多感測器到 Arduino。
+   - 支援多種 IMU 型號。
+
+#### **注意事項**
+1. **PWM 校準**：
+   - 根據 ESC 規格調整：
+     ```python
+     def convert_to_pwm(self, cmd):
+         return 1500 + 500 * cmd  # 修改此處參數
+     ```
+
+2. **IMU 校正**：
+   - 使用 RTIMULibCal 工具進行硬鐵校正。
+   - 保存校正文件至指定路徑。
+
+3. **電源隔離**：
+   - Arduino 與 ESC 使用獨立電源。
+   - 添加光耦合隔離電路防干擾。
+
+4. **通訊檢測**：
+   - 監視 Arduino 通訊狀態：
+     ```bash
+     ros2 topic echo /rosout
+     ```
+
+---
+
+
+

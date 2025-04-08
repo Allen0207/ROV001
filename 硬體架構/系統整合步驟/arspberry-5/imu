@@ -1,0 +1,139 @@
+步驟1：設置 ROS 與 Arduino 通訊
+# 在樹莓派安裝 rosserial
+sudo apt-get install ros-humble-rosserial-arduino
+sudo apt-get install ros-humble-rosserial
+
+# 安裝 Arduino IDE 與 ROS 庫
+cd <arduino_sketchbook>/libraries
+rosrun rosserial_arduino make_libraries.py .
+
+步驟3：更新樹莓派控制節點 (rov_control_node.py)
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+from std_msgs.msg import Float32MultiArray, UInt8
+from sensor_msgs.msg import Imu
+
+class ROVControlNode(Node):
+    def __init__(self):
+        super().__init__('rov_control_node')
+        
+        # 初始化參數與狀態
+        self.declare_parameters(namespace='',parameters=[
+            ('control_mode', 1),  # 默認自穩模式
+            ('Kp', 0.8), ('Ki', 0.01), ('Kd', 0.05)
+        ])
+        
+        # 創建發布者 (發送 PWM 到 Arduino)
+        self.pwm_pub = self.create_publisher(Float32MultiArray, 'cmd_pwm', 10)
+        
+        # 創建訂閱者
+        self.create_subscription(Twist, 'cmd_vel', self.vel_callback, 10)
+        self.create_subscription(Imu, '/imu/data', self.imu_callback, 10)
+        self.create_subscription(UInt8, 'control_mode', self.mode_callback,10)
+        
+        # 控制定時器
+        self.create_timer(0.05, self.control_loop)  # 20Hz
+        
+        # 初始化變數
+        self.last_imu = None
+        self.target_depth = 0.0
+        self.depth_integral = 0.0
+        self.last_error = 0.0
+
+    def vel_callback(self, msg):
+        self.cmd_vel = msg
+
+    def imu_callback(self, msg):
+        self.last_imu = msg
+        # 可在此進行姿態計算
+
+    def mode_callback(self, msg):
+        self.get_parameter('control_mode').value = msg.data
+        if msg.data == 2:  # 定深模式
+            self.target_depth = self.current_depth()
+
+    def current_depth(self):
+        # 需替換為實際深度獲取邏輯
+        return 0.0  
+
+    def control_loop(self):
+        try:
+            # 模式判斷
+            mode = self.get_parameter('control_mode').value
+            
+            # 基礎控制計算
+            if mode == 1:  # 自穩模式
+                surge, sway, heave, yaw = self.stabilize_control()
+            elif mode == 2: # 定深模式
+                surge, sway, heave, yaw = self.depth_control()
+            else:           # 手動模式
+                surge = self.cmd_vel.linear.x
+                sway = self.cmd_vel.linear.y
+                heave = self.cmd_vel.linear.z
+                yaw = self.cmd_vel.angular.z
+            
+            # 矩陣運算轉換為推進器指令
+            thruster_cmd = self.thruster_mixing(surge, sway, heave, yaw)
+            
+            # 發布 PWM 指令
+            pwm_msg = Float32MultiArray()
+            pwm_msg.data = [self.convert_to_pwm(cmd) for cmd in thruster_cmd]
+            self.pwm_pub.publish(pwm_msg)
+            
+        except Exception as e:
+            self.get_logger().error(f"控制循環錯誤: {str(e)}")
+
+    def stabilize_control(self):
+        # 姿態穩定控制算法
+        # 使用 IMU 數據計算調整量
+        if self.last_imu:
+            # 解析四元數計算歐拉角
+            q = self.last_imu.orientation
+            roll, pitch, _ = self.quaternion_to_euler(q.x, q.y, q.z, q.w)
+            
+            # PID 計算
+            Kp = self.get_parameter('Kp').value
+            roll_adj = -Kp * roll
+            pitch_adj = -Kp * pitch
+            return (self.cmd_vel.linear.x + roll_adj,
+                    self.cmd_vel.linear.y + pitch_adj,
+                    self.cmd_vel.linear.z,
+                    self.cmd_vel.angular.z)
+        else:
+            return self.cmd_vel.linear.x, self.cmd_vel.linear.y, self.cmd_vel.linear.z, self.cmd_vel.angular.z
+
+    def thruster_mixing(self, surge, sway, heave, yaw):
+        # 推進器混合矩陣計算
+        matrix = [
+            [ 0.707,  0.707,  0.0, -1.0],  # 前左
+            [ 0.707, -0.707,  0.0,  1.0],  # 前右
+            [-0.707,  0.707,  0.0, -1.0],  # 後左
+            [-0.707, -0.707,  0.0,  1.0],  # 後右
+            [   0.0,    0.0,  1.0,  0.0],  # 垂直左
+            [   0.0,    0.0,  1.0,  0.0]   # 垂直右
+        ]
+        return [sum([m[i]*v for i,v in enumerate([surge,sway,heave,yaw])] for m in matrix]
+
+    def convert_to_pwm(self, cmd):
+        # 將 [-1.0~1.0] 轉換為 PWM 脈衝寬度
+        return 1500 + 500 * cmd  # 中性點 1500μs，±500μs 範圍
+
+    def quaternion_to_euler(self, x, y, z, w):
+        # 四元數轉歐拉角實現
+        # ... 同先前代碼 ...
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ROVControlNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,127 @@
+以下是設定 Arduino 透過 USB 與 ROS 進行通訊的完整程式碼與步驟：
+
+---
+
+### Arduino 程式碼 (rov_arduino_control.ino)
+```cpp
+#include <ros.h>
+#include <std_msgs/Float32MultiArray.h>
+#include <std_msgs/Float32.h>
+#include <Wire.h>
+
+// PWM 輸出引腳配置
+const int thrusterPins[] = {3, 5, 6, 9, 10, 11}; // 對應 6 個推進器
+
+// 水壓感測器地址與數據
+const int pressureSensorAddress = 0x76; // 假設水壓感測器的 I2C 地址
+float pressureValue = 0.0;
+
+ros::NodeHandle nh;
+
+// ROS 訂閱者：接收推進器 PWM 指令
+void pwmCallback(const std_msgs::Float32MultiArray& cmd) {
+  // 確保接收數據長度正確
+  if (cmd.data_length == 6) {
+    for (int i = 0; i < 6; i++) {
+      int pwm = (int)cmd.data[i];
+      pwm = constrain(pwm, 1000, 2000); // ESC 安全範圍
+      analogWrite(thrusterPins[i], map(pwm, 1000, 2000, 0, 255));
+    }
+  }
+}
+ros::Subscriber<std_msgs::Float32MultiArray> sub("cmd_pwm", &pwmCallback);
+
+// ROS 發布者：發布水壓數據
+std_msgs::Float32 pressureMsg;
+ros::Publisher pressurePub("pressure_data", &pressureMsg);
+
+void setup() {
+  // 初始化 PWM 引腳
+  for (int pin : thrusterPins) {
+    pinMode(pin, OUTPUT);
+    analogWrite(pin, 127); // 初始中性點 (1500us)
+  }
+
+  // 初始化 I2C
+  Wire.begin();
+
+  // 初始化 ROS 節點
+  nh.initNode();
+  nh.subscribe(sub);
+  nh.advertise(pressurePub);
+}
+
+void loop() {
+  // 讀取水壓感測器數據
+  pressureValue = readPressureSensor();
+  pressureMsg.data = pressureValue;
+  pressurePub.publish(&pressureMsg);
+
+  // 處理 ROS 通訊
+  nh.spinOnce();
+  delay(10);
+}
+
+// 讀取水壓感測器數據的函數
+float readPressureSensor() {
+  Wire.beginTransmission(pressureSensorAddress);
+  Wire.write(0x00); // 假設讀取命令
+  Wire.endTransmission();
+  Wire.requestFrom(pressureSensorAddress, 2); // 假設返回 2 個字節數據
+
+  if (Wire.available() == 2) {
+    int highByte = Wire.read();
+    int lowByte = Wire.read();
+    int rawPressure = (highByte << 8) | lowByte;
+    return rawPressure / 100.0; // 假設轉換為壓力值（單位：bar）
+  }
+
+  return 0.0; // 如果讀取失敗，返回 0
+}
+```
+
+---
+
+### ROS 主機端設置
+
+1. **安裝 `rosserial` 套件**：
+   在 ROS 主機端執行以下指令安裝 `rosserial`：
+   ```bash
+   sudo apt-get install ros-<ros_distro>-rosserial ros-<ros_distro>-rosserial-arduino
+   sudo apt-get install ros-<ros_distro>-rosserial-python
+   ```
+   > 將 `<ros_distro>` 替換為您的 ROS 發行版本（如 `noetic` 或 `foxy`）。
+
+2. **啟動 ROS Serial 節點**：
+   使用以下指令啟動 ROS Serial 節點，並指定 Arduino 的 USB 端口（如 `/dev/ttyACM0`）：
+   ```bash
+   ros2 run rosserial_python serial_node.py _port:=/dev/ttyACM0 _baud:=57600
+   ```
+
+3. **檢查 ROS 話題**：
+   確保 Arduino 已成功連接，並檢查話題是否正確發布：
+   ```bash
+   ros2 topic list
+   ```
+   您應該能看到以下話題：
+   - `/cmd_pwm`：接收推進器 PWM 指令。
+   - `/pressure_data`：發布水壓感測器數據。
+
+---
+
+### 測試通訊
+
+1. **發布 PWM 指令**：
+   使用以下指令向 Arduino 發送 PWM 指令：
+   ```bash
+   ros2 topic pub /cmd_pwm std_msgs/Float32MultiArray "data: [1500, 1500, 1500, 1500, 1500, 1500]"
+   ```
+
+2. **監控水壓數據**：
+   使用以下指令監控 Arduino 發布的水壓數據：
+   ```bash
+   ros2 topic echo /pressure_data
+   ```
+
+-
+#### 這樣的設置可以讓 Arduino 通過 USB 與 ROS 主機進行雙向通訊，實現推進器控制與水壓數據的發布。

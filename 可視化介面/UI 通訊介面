@@ -1,0 +1,151 @@
+
+### 1. 基本系統設定
+
+1. **更新系統**：
+   - 確保樹莓派的系統是最新版本：
+     ```bash
+     sudo apt update && sudo apt upgrade -y
+     ```
+
+2. **啟用必要的介面**：
+   - 使用 `raspi-config` 工具啟用以下介面：
+     ```bash
+     sudo raspi-config
+     ```
+     - **Interfacing Options**：
+       - 啟用 **I2C**（用於感測器）。
+       - 啟用 **SPI**（若需要）。
+       - 啟用 **Serial**（用於與 Arduino 通訊）。
+       - 啟用 **Camera**（若使用樹莓派相機模組）。
+
+3. **安裝必要工具**：
+   - 安裝常用工具與開發環境：
+     ```bash
+     sudo apt install -y git vim screen minicom python3-pip
+     ```
+
+---
+
+### 2. Python 開發環境設定
+
+1. **安裝 Python 套件管理工具**：
+   - 確保 `pip` 已安裝：
+     ```bash
+     sudo apt install -y python3-pip
+     ```
+
+2. **安裝必要的 Python 套件**：
+   - 安裝 PyQt6、pygame、pyserial 等開發所需的套件：
+     ```bash
+     pip3 install PyQt6 pygame pyserial numpy matplotlib
+     ```
+
+3. **測試 Python 環境**：
+   - 測試 Python 是否能正常運行：
+     ```bash
+     python3
+     ```
+     - 輸入以下指令測試：
+       ```python
+       import PyQt6
+       import pygame
+       import serial
+       print("Python 環境設定成功！")
+       ```
+
+---
+
+### 3. 與 Arduino 的串口通訊設定
+
+1. **確認串口設備**：
+   - 使用以下指令確認 Arduino 是否已連接：
+     ```bash
+     ls /dev/ttyACM*
+     ```
+     - 通常會顯示 `/dev/ttyACM0`。
+
+2. **測試串口通訊**：
+   - 使用 `minicom` 測試與 Arduino 的通訊：
+     ```bash
+     sudo apt install -y minicom
+     minicom -D /dev/ttyACM0 -b 9600
+     ```
+
+3. **設定串口權限**：
+   - 確保當前用戶對串口設備有讀寫權限：
+     ```bash
+     sudo usermod -a -G dialout $USER
+     ```
+
+---
+
+### 4. 樹莓派與 ROV 系統整合
+
+1. **啟用 WiFi 或 Ethernet**：
+   - 確保樹莓派可以通過 WiFi 或有線網路與地面站通訊。
+
+2. **部署 UI 介面程式**：
+   - 將 UI 程式碼部署到樹莓派：
+     ```bash
+     git clone <你的程式碼倉庫>
+     cd <程式碼目錄>
+     python3 rov_ui.py
+     ```
+
+3. **啟動 VNC Server（可選）**：
+   - 安裝並啟用 VNC Server，方便遠端桌面連接：
+     ```bash
+     sudo apt install -y realvnc-vnc-server
+     sudo systemctl enable vncserver-x11-serviced.service
+     sudo systemctl start vncserver-x11-serviced.service
+     ```
+
+---
+
+### 5. 測試與調試
+
+1. **測試 UI 與搖桿控制**：
+   - 使用 `pygame` 測試搖桿是否正常工作：
+     ```bash
+     python3 -m pygame.examples.joystick
+     ```
+
+2. **測試與 Arduino 的通訊**：
+   - 執行 UI 程式，檢查是否能正常向 Arduino 發送指令並接收回傳數據。
+
+3. **檢查感測器與執行器**：
+   - 測試 I2C 感測器是否正常工作：
+     ```bash
+     sudo i2cdetect -y 1
+     ```
+
+---
+
+### 6. 系統優化（可選）
+
+1. **設定開機自動啟動程式**：
+   - 編輯 `~/.bashrc`，加入以下內容：
+     ```bash
+     python3 /path/to/rov_ui.py
+     ```
+
+2. **監控系統資源**：
+   - 使用 `htop` 或 `top` 監控系統資源使用情況：
+     ```bash
+     sudo apt install -y htop
+     htop
+     ```
+
+---
+
+### 7. 注意事項
+
+1. **硬體連接**：
+   - 確保伺服馬達與感測器的電源穩定，避免因電壓不足導致系統不穩定。
+
+2. **串口通訊**：
+   - 確保 Arduino 與樹莓派的波特率一致（如 9600）。
+
+3. **除錯工具**：
+   - 使用 `screen` 或 `minicom` 進行串口除錯，方便檢查通訊問題。
+

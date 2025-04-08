@@ -1,0 +1,324 @@
+
+### ui控制介面
+
+1. **R1、L1、R2、L2 控制**：
+   - R1/L1：控制夾爪的開合。
+   - R2/L2：控制夾爪的上下移動。
+
+2. **PS5 搖桿 API**：
+   - 提供搖桿按鍵、軸值的讀取範例。
+
+---
+
+###  (rov_ui.py)
+```python
+import sys
+import random
+import numpy as np
+import pygame
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget,
+    QProgressBar, QDockWidget
+)
+from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QFont
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from mpl_toolkits.mplot3d import Axes3D
+from collections import deque
+
+
+class ROV_UI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("ROV 競賽控制面板 - 專業版")
+        self.setGeometry(50, 50, 1920, 1080)
+
+        # 初始化 pygame（偵測搖桿）
+        pygame.init()
+        pygame.joystick.init()
+
+        # 嘗試連接 PS5 搖桿
+        self.joystick = None
+        if pygame.joystick.get_count() > 0:
+            self.joystick = pygame.joystick.Joystick(0)
+            self.joystick.init()
+            print(f"已連接搖桿: {self.joystick.get_name()}")
+        else:
+            print("未檢測到搖桿，啟用模擬模式")
+
+        # 初始化模擬數據
+        self.simulated_data = {
+            "depth": 0.0,  # 深度 (m)
+            "voltage": 48.0,  # 電壓 (V)
+            "battery": 100.0,  # 電池電量 (%)
+            "imu": (0.0, 0.0, 0.0),  # Pitch, Roll, Yaw
+            "gripper": {"up_down": 90, "left_right": 90, "open_close": 90}  # 夾爪角度
+        }
+
+        # 儲存歷史數據
+        self.data_history = {
+            "depth": deque(maxlen=100),
+            "voltage": deque(maxlen=100),
+            "battery": deque(maxlen=100),
+            "imu_x": deque(maxlen=100),
+            "imu_y": deque(maxlen=100),
+            "imu_z": deque(maxlen=100)
+        }
+
+        self.main_widget = QWidget()
+        self.setCentralWidget(self.main_widget)
+        self.main_layout = QVBoxLayout()
+        self.main_widget.setLayout(self.main_layout)
+
+        self.init_docking_ui()
+
+        # 設定計時器（每 100ms 更新數據）
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_data)
+        self.timer.start(100)
+
+    def create_label(self, text):
+        """建立標籤"""
+        label = QLabel(text)
+        label.setFont(QFont("Arial", 20))
+        return label
+
+    def init_docking_ui(self):
+        """建立 Docking 介面"""
+        self.data_dock = QDockWidget("📊 即時數據監測", self)
+        self.data_dock.setWidget(self.create_data_page())
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.data_dock)
+
+        self.chart_dock = QDockWidget("📈 IMU 3D 圖表", self)
+        self.chart_dock.setWidget(self.create_chart_page())
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.chart_dock)
+
+    def create_data_page(self):
+        """建立即時數據監測區域"""
+        page = QWidget()
+        layout = QVBoxLayout()
+
+        self.depth_label = self.create_label("🌊 深度 (m): --")
+        self.voltage_label = self.create_label("🔋 電壓 (V): --")
+        self.battery_label = self.create_label("⚡ 電池容量 (%): --")
+        self.imu_label = self.create_label("🎛️ IMU: Pitch: --°, Roll: --°, Yaw: --°")
+        self.gripper_label = self.create_label("🤖 夾爪: 上下: --°, 左右: --°, 開合: --°")
+
+        labels = [self.depth_label, self.voltage_label, self.battery_label, self.imu_label, self.gripper_label]
+        for label in labels:
+            layout.addWidget(label)
+
+        self.battery_bar = QProgressBar()
+        self.battery_bar.setMinimum(0)
+        self.battery_bar.setMaximum(100)
+        self.battery_bar.setFixedHeight(50)
+        layout.addWidget(self.battery_bar)
+
+        page.setLayout(layout)
+        return page
+
+    def create_chart_page(self):
+        """建立 IMU 3D 圖表"""
+        page = QWidget()
+        layout = QVBoxLayout()
+
+        self.fig = Figure(figsize=(10, 8))
+        self.canvas = FigureCanvas(self.fig)
+        self.ax_imu = self.fig.add_subplot(111, projection="3d")
+
+        layout.addWidget(self.canvas)
+        page.setLayout(layout)
+        return page
+
+    def update_data(self):
+        """📊 更新數據"""
+        pygame.event.pump()  # 更新 pygame 事件
+
+        # 搖桿或鍵盤控制
+        if self.joystick:
+            pitch = self.joystick.get_axis(1) * 30
+            roll = self.joystick.get_axis(0) * 30
+            yaw = self.joystick.get_axis(2) * 180
+
+            # 使用 R1/L1 控制夾爪開合
+            if self.joystick.get_button(5):  # R1
+                self.simulated_data["gripper"]["open_close"] += 5
+            if self.joystick.get_button(4):  # L1
+                self.simulated_data["gripper"]["open_close"] -= 5
+
+            # 使用 R2/L2 控制夾爪上下移動
+            r2 = self.joystick.get_axis(5)  # R2 軸值
+            l2 = self.joystick.get_axis(4)  # L2 軸值
+            self.simulated_data["gripper"]["up_down"] += int(r2 * 5)
+            self.simulated_data["gripper"]["up_down"] -= int(l2 * 5)
+        else:
+            keys = pygame.key.get_pressed()
+            pitch = (keys[pygame.K_w] - keys[pygame.K_s]) * 30
+            roll = (keys[pygame.K_a] - keys[pygame.K_d]) * 30
+            yaw = (keys[pygame.K_q] - keys[pygame.K_e]) * 180
+
+            # 鍵盤控制夾爪
+            self.simulated_data["gripper"]["up_down"] += (keys[pygame.K_i] - keys[pygame.K_k]) * 5
+            self.simulated_data["gripper"]["left_right"] += (keys[pygame.K_j] - keys[pygame.K_l]) * 5
+            self.simulated_data["gripper"]["open_close"] += (keys[pygame.K_u] - keys[pygame.K_o]) * 5
+
+        # 限制夾爪角度範圍
+        for key in self.simulated_data["gripper"]:
+            self.simulated_data["gripper"][key] = np.clip(self.simulated_data["gripper"][key], 0, 180)
+
+        # 模擬數據更新
+        self.simulated_data["depth"] = np.clip(self.simulated_data["depth"] + np.random.uniform(-0.5, 0.5), 0, 50)
+        self.simulated_data["voltage"] = np.clip(self.simulated_data["voltage"] - np.random.uniform(0, 0.1), 45, 50)
+        self.simulated_data["battery"] = max(0, self.simulated_data["battery"] - np.random.uniform(0, 0.3))
+        self.simulated_data["imu"] = (pitch, roll, yaw)
+
+        for key in ["depth", "voltage", "battery"]:
+            self.data_history[key].append(self.simulated_data[key])
+
+        self.data_history["imu_x"].append(self.simulated_data["imu"][0])
+        self.data_history["imu_y"].append(self.simulated_data["imu"][1])
+        self.data_history["imu_z"].append(self.simulated_data["imu"][2])
+
+        # 更新介面
+        self.depth_label.setText(f"🌊 深度 (m): {self.simulated_data['depth']:.2f}")
+        self.voltage_label.setText(f"🔋 電壓 (V): {self.simulated_data['voltage']:.2f}")
+        self.battery_label.setText(f"⚡ 電池容量 (%): {self.simulated_data['battery']:.1f}")
+        self.imu_label.setText(f"🎛️ IMU: Pitch: {self.simulated_data['imu'][0]:.1f}°, "
+                               f"Roll: {self.simulated_data['imu'][1]:.1f}°, "
+                               f"Yaw: {self.simulated_data['imu'][2]:.1f}°")
+        self.gripper_label.setText(f"🤖 夾爪: 上下: {self.simulated_data['gripper']['up_down']}°, "
+                                   f"左右: {self.simulated_data['gripper']['left_right']}°, "
+                                   f"開合: {self.simulated_data['gripper']['open_close']}°")
+
+        self.battery_bar.setValue(int(self.simulated_data["battery"]))
+
+        self.update_chart()
+
+    def update_chart(self):
+        """更新 IMU 3D 圖表"""
+        self.ax_imu.clear()
+        self.ax_imu.scatter(self.data_history["imu_x"], self.data_history["imu_y"], self.data_history["imu_z"], c="red", marker="o")
+        self.ax_imu.set_xlabel("Pitch (°)")
+        self.ax_imu.set_ylabel("Roll (°)")
+        self.ax_imu.set_zlabel("Yaw (°)")
+        self.canvas.draw()
+
+
+app = QApplication(sys.argv)
+window = ROV_UI()
+window.show()
+sys.exit(app.exec())
+```
+
+---
+
+### PS5 搖桿 API 範例
+
+1. **按鍵檢測**：
+   - `joystick.get_button(button_id)`：檢測按鍵是否被按下。
+     - `button_id=4`：L1
+     - `button_id=5`：R1
+
+2. **軸值檢測**：
+   - `joystick.get_axis(axis_id)`：獲取軸值（範圍：-1.0 ~ 1.0）。
+     - `axis_id=4`：L2
+     - `axis_id=5`：R2
+
+---
+以下是整理後的 **UI 可視化介面與通訊** 說明，包含功能、執行方式與注意事項。
+
+---
+
+### 功能描述
+
+1. **搖桿控制**：
+   - **R1/L1**：控制夾爪的開合。
+   - **R2/L2**：控制夾爪的上下移動。
+   - **左搖桿 X 軸**：控制夾爪的左右旋轉。
+
+2. **數據顯示**：
+   - 即時顯示 ROV 的深度、電壓、電池狀態。
+   - 顯示 IMU 數據（Pitch, Roll, Yaw）。
+   - 顯示夾爪的當前角度（上下、左右、開合）。
+
+3. **通訊方式**：
+   - 使用串口（USB/UART）與 Arduino 通訊，傳輸控制指令與接收回傳數據。
+
+---
+
+### PS5 搖桿 API 範例
+
+1. **按鍵檢測**：
+   - `joystick.get_button(button_id)`：檢測按鍵是否被按下。
+     - `button_id=4`：L1
+     - `button_id=5`：R1
+
+2. **軸值檢測**：
+   - `joystick.get_axis(axis_id)`：獲取軸值（範圍：-1.0 ~ 1.0）。
+     - `axis_id=4`：L2
+     - `axis_id=5`：R2
+
+---
+
+### 新增功能
+
+1. **R1/L1 控制夾爪開合**。
+2. **R2/L2 控制夾爪上下移動**。
+3. **即時顯示夾爪狀態**。
+
+---
+
+### 執行方式
+
+1. 安裝必要的 Python 套件：
+   ```bash
+   pip install PyQt6 matplotlib pygame numpy
+   ```
+
+2. 將程式碼保存為 `rov_ui.py`，然後執行：
+   ```bash
+   python3 rov_ui.py
+   ```
+
+---
+
+### 注意事項
+
+1. **搖桿按鍵與軸值**：
+   - 搖桿按鍵和軸值的映射可能因設備不同而有所差異，請使用以下指令測試按鍵和軸值：
+     ```bash
+     python3 -m pygame.examples.joystick
+     ```
+
+2. **串口通訊**：
+   - 確保 Arduino 與電腦的串口連接正常，並確認串口名稱（如 `/dev/ttyACM0`）。
+   - 如果無法通訊，請檢查串口權限：
+     ```bash
+     sudo usermod -a -G dialout $USER
+     ```
+
+3. **伺服馬達角度範圍**：
+   - 伺服馬達的角度範圍應限制在 `0° ~ 180°`，避免超出物理限制導致損壞。
+
+4. **執行程式**：
+   - 確保程式碼保存為正確的檔案名稱（如 `rov_ui.py`），並使用以下指令執行：
+     ```bash
+     python3 rov_ui.py
+     ```
+
+5. **除錯工具**：
+   - 使用 `print` 或 `logging` 在程式中輸出調試信息，方便檢查搖桿輸入與伺服馬達控制是否正常。
+
+6. **系統資源**：
+   - 如果系統資源不足（如 CPU 或記憶體），可能導致 UI 更新延遲或卡頓，建議關閉其他不必要的程式。
+
+7. **模擬模式**：
+   - 如果未檢測到搖桿，程式會啟用模擬模式，請檢查搖桿連接或使用鍵盤進行測試。
+
+8. **安全性**：
+   - 在測試伺服馬達時，確保周圍無障礙物，避免因馬達運動導致損壞或危險。
+
+---
+
+此整理有助於確保 UI 介面與搖桿控制功能的穩定性與可靠性，適用於水下機器人（ROV）的開發與測試環境。
