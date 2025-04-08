@@ -1,0 +1,201 @@
+以下是基於 **手柄按鍵（R1、L1、R2、L2）** 控制三軸夾爪的完整通訊設計與程式碼，實現 Raspberry Pi 5 與 Arduino 的協同工作。
+
+---
+
+### 1. 功能描述
+
+1. **控制方式**：
+   - **R1/L1**：控制夾爪的開合。
+     - R1：打開夾爪。
+     - L1：關閉夾爪。
+   - **R2/L2**：控制夾爪的上下移動。
+     - R2：向上移動。
+     - L2：向下移動。
+   - **左搖桿 X 軸**：控制夾爪的左右旋轉。
+
+2. **通訊方式**：
+   - Raspberry Pi 5 作為上位機，通過 USB 與 Arduino 進行串口通訊。
+   - Arduino 作為下位機，接收指令並生成 PWM 信號控制伺服馬達。
+
+---
+
+### 2. Raspberry Pi 5 程式碼
+
+以下是 Raspberry Pi 5 的 Python 程式碼，用於讀取手柄輸入並向 Arduino 發送控制指令：
+
+```python
+import serial
+import time
+import pygame
+
+# 初始化串口
+arduino = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
+time.sleep(2)  # 等待 Arduino 重置
+
+# 初始化 pygame（手柄控制）
+pygame.init()
+pygame.joystick.init()
+
+# 嘗試連接手柄
+joystick = None
+if pygame.joystick.get_count() > 0:
+    joystick = pygame.joystick.Joystick(0)
+    joystick.init()
+    print(f"已連接手柄: {joystick.get_name()}")
+else:
+    print("未檢測到手柄，請檢查連接")
+    exit()
+
+def send_command(command, value):
+    """向 Arduino 發送指令"""
+    message = f"{command}:{value}\n"
+    arduino.write(message.encode())
+    print(f"已發送: {message.strip()}")
+
+try:
+    while True:
+        pygame.event.pump()  # 更新手柄事件
+
+        # 讀取按鍵狀態
+        r1 = joystick.get_button(5)  # R1 按鍵
+        l1 = joystick.get_button(4)  # L1 按鍵
+        r2 = joystick.get_axis(5)    # R2 軸值（範圍：0 ~ 1）
+        l2 = joystick.get_axis(4)    # L2 軸值（範圍：0 ~ 1）
+        joystick_x = joystick.get_axis(0)  # 左搖桿 X 軸
+
+        # 控制開合（R1 打開，L1 關閉）
+        if r1:
+            send_command("O", 180)  # 打開夾爪
+        elif l1:
+            send_command("O", 0)    # 關閉夾爪
+
+        # 控制上下移動（R2 向上，L2 向下）
+        if r2 > 0.1:  # R2 軸值大於 0.1
+            send_command("U", int(r2 * 180))  # 向上移動
+        elif l2 > 0.1:  # L2 軸值大於 0.1
+            send_command("U", int(180 - l2 * 180))  # 向下移動
+
+        # 控制左右旋轉（左搖桿 X 軸）
+        rotation_angle = int((joystick_x + 1) * 90)  # 映射到 0 ~ 180
+        send_command("R", rotation_angle)
+
+        time.sleep(0.1)  # 延遲 100ms
+
+except KeyboardInterrupt:
+    print("結束通訊")
+    arduino.close()
+```
+
+---
+
+### 3. Arduino 程式碼
+
+以下是 Arduino 的程式碼，用於接收 Raspberry Pi 5 的指令並控制伺服馬達：
+
+```cpp
+#include <Servo.h>
+
+// 定義伺服馬達
+Servo gripper_up_down;    // 上下移動
+Servo gripper_left_right; // 左右旋轉
+Servo gripper_open_close; // 開合控制
+
+// 初始角度
+int angle_up_down = 90;
+int angle_left_right = 90;
+int angle_open_close = 90;
+
+void setup() {
+  // 初始化伺服馬達
+  gripper_up_down.attach(9);
+  gripper_left_right.attach(10);
+  gripper_open_close.attach(11);
+
+  // 設置初始位置
+  gripper_up_down.write(angle_up_down);
+  gripper_left_right.write(angle_left_right);
+  gripper_open_close.write(angle_open_close);
+
+  // 初始化串口
+  Serial.begin(9600);
+}
+
+void loop() {
+  // 檢查是否有來自 Pi5 的指令
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n'); // 讀取指令
+    handleCommand(command); // 處理指令
+  }
+}
+
+void handleCommand(String command) {
+  char cmd = command.charAt(0); // 指令代碼
+  int value = command.substring(2).toInt(); // 指令值
+
+  switch (cmd) {
+    case 'U': // 上下移動
+      angle_up_down = constrain(value, 0, 180);
+      gripper_up_down.write(angle_up_down);
+      break;
+    case 'R': // 左右旋轉
+      angle_left_right = constrain(value, 0, 180);
+      gripper_left_right.write(angle_left_right);
+      break;
+    case 'O': // 開合控制
+      angle_open_close = constrain(value, 0, 180);
+      gripper_open_close.write(angle_open_close);
+      break;
+    default:
+      // 未知指令
+      break;
+  }
+
+  // 調試輸出
+  Serial.print("指令: ");
+  Serial.print(cmd);
+  Serial.print(" | 值: ");
+  Serial.println(value);
+}
+```
+
+---
+
+### 4. 測試方式
+
+1. **硬體連接**：
+   - 使用 USB 將 Raspberry Pi 5 和 Arduino 連接。
+   - 確保伺服馬達的信號線分別連接到 Arduino 的 PWM 引腳（9、10、11）。
+
+2. **執行程式**：
+   - 在 Raspberry Pi 5 上執行 Python 程式碼：
+     ```bash
+     python3 pi5_control.py
+     ```
+   - Arduino 自動接收指令並控制伺服馬達。
+
+3. **觀察結果**：
+   - 根據手柄的按鍵（R1、L1、R2、L2）和搖桿輸入，觀察伺服馬達的角度變化。
+
+---
+
+### 5. 適用場景
+
+- **水下機器人（ROV）**：
+  - 使用 Raspberry Pi 5 作為上位機，通過 Arduino 控制三軸夾爪進行水下操作。
+
+- **競賽應用**：
+  - 在 ROV 競賽中，實現精確的抓取和操作任務。
+
+---
+
+; ### 6. 注意事項
+;
+; - 確保手柄已正確連接並被 Raspberry Pi 5 識別。
+; - 調整伺服馬達的電源供應，確保其能正常運行。
+; - 測試時注意伺服馬達的角度範圍，避免超出物理限制。
+; - 在實際應用中，根據需要調整 PWM 信號的頻率和範圍。
+; - 測試過程中，注意觀察伺服馬達的運行狀態，確保其正常工作。
+; - 在使用過程中，定期檢查連接線路和伺服馬達的狀態，確保其穩定性和可靠性。
+; - 在實際應用中，根據需要調整程式碼中的參數和邏輯，以滿足特定需求。
+; - 測試過程中，注意觀察伺服馬達的運行狀態，確保其正常工作。
+; - 在使用過程中，定期檢查連接線路和伺服馬達的狀態，確保其穩定性和可靠性。      

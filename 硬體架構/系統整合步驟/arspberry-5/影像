@@ -1,0 +1,114 @@
+以下是基於 **H.265 視頻傳輸技術方案**，適用於 USB 攝像頭或 IP 攝像頭的實現方式：
+
+---
+
+### 技術方案概述
+
+1. **硬體需求**：
+   - **USB 攝像頭**：支持 H.265 編碼的 USB 攝像頭（如 Logitech BRIO 或其他支持 H.265 的攝像頭）。
+   - **IP 攝像頭**：支持 H.265 編碼的網絡攝像頭（如 Dahua、Hikvision 等品牌）。
+   - **主控設備**：Raspberry Pi 5 或其他嵌入式設備，支持 USB 3.0 或網絡接口。
+   - **接收端**：地面站（PC）或其他支持 H.265 解碼的設備。
+
+2. **軟體需求**：
+   - **視頻編碼與傳輸**：
+     - USB 攝像頭：使用 GStreamer 或 FFmpeg 將視頻流封裝並傳輸。
+     - IP 攝像頭：直接通過 RTSP 協議獲取視頻流。
+   - **視頻解碼與顯示**：地面站使用 VLC、FFmpeg 或自定義應用進行解碼與顯示。
+
+---
+
+### 系統架構
+
+1. **USB 攝像頭方案**：
+   - 使用 GStreamer 或 FFmpeg 將 USB 攝像頭的 H.265 視頻流封裝為 RTP/RTSP 格式，通過網絡傳輸到地面站。
+
+2. **IP 攝像頭方案**：
+   - 通過 RTSP 協議直接從 IP 攝像頭獲取 H.265 視頻流，並在地面站進行解碼與顯示。
+
+---
+
+### 配置與實現
+
+#### **方案 1：USB 攝像頭**
+
+##### 1. 在 Raspberry Pi 上設置視頻流
+
+使用 GStreamer 將 USB 攝像頭的 H.265 視頻流封裝為 RTP 並傳輸：
+
+```bash
+gst-launch-1.0 v4l2src device=/dev/video0 ! video/x-h265, width=1920, height=1080, framerate=30/1 ! h265parse ! rtph265pay config-interval=1 pt=96 ! udpsink host=<地面站IP> port=5000
+```
+
+- `device=/dev/video0`：指定 USB 攝像頭設備。
+- `video/x-h265`：設置視頻格式為 H.265。
+- `udpsink`：將視頻流通過 UDP 傳輸到地面站。
+
+##### 2. 在地面站接收視頻流
+
+使用 GStreamer 或 VLC 接收並顯示視頻流：
+
+**GStreamer**：
+```bash
+gst-launch-1.0 udpsrc port=5000 caps="application/x-rtp, media=video, encoding-name=H265, payload=96" ! rtph265depay ! avdec_h265 ! autovideosink
+```
+
+**VLC**：
+```bash
+vlc udp://@:5000
+```
+
+---
+
+#### **方案 2：IP 攝像頭**
+
+##### 1. 獲取 IP 攝像頭的 RTSP 地址
+
+通常，IP 攝像頭的 RTSP 地址格式如下：
+```
+rtsp://<username>:<password>@<camera_ip>:<port>/<stream_path>
+```
+例如：
+```
+rtsp://admin:123456@192.168.1.100:554/stream1
+```
+
+##### 2. 在地面站接收並顯示視頻流
+
+**使用 VLC**：
+```bash
+vlc rtsp://<username>:<password>@<camera_ip>:<port>/<stream_path>
+```
+
+**使用 GStreamer**：
+```bash
+gst-launch-1.0 rtspsrc location="rtsp://<username>:<password>@<camera_ip>:<port>/<stream_path>" ! rtph265depay ! avdec_h265 ! autovideosink
+```
+
+---
+
+### 優化與注意事項
+
+1. **帶寬優化**：
+   - 使用 H.265 編碼可以顯著降低帶寬需求，但需要確保設備支持硬件編解碼。
+
+2. **延遲控制**：
+   - 使用低延遲的傳輸協議（如 RTP）。
+   - 減少視頻緩衝區大小（可在 GStreamer 或 VLC 中設置）。
+
+3. **硬件支持**：
+   - 確保 Raspberry Pi 或地面站支持 H.265 硬件解碼，否則可能導致高 CPU 使用率。
+
+4. **穩定性測試**：
+   - 在實際環境中測試視頻流的穩定性，特別是在高帶寬或長距離傳輸場景下。
+
+---
+
+### 適用場景
+
+- **USB 攝像頭方案**：適合短距離傳輸，使用嵌入式設備（如 Raspberry Pi）進行視頻處理。
+- **IP 攝像頭方案**：適合長距離傳輸，直接通過網絡獲取視頻流，減少處理負擔。
+
+---
+
+這兩種方案均可實現基於 H.265 的高效視頻傳輸，根據實際需求選擇合適的方案即可。

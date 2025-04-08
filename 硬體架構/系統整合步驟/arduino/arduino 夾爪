@@ -1,0 +1,135 @@
+##Arduino 夾爪控制程式碼**，改用 **
+##手柄板機（R2、L2）** 控制夾爪的上下移動和開合，並使用搖桿的左右軸控制夾爪的旋轉。
+
+
+#include <Servo.h>
+
+// 定義伺服馬達
+Servo gripper_up_down;    // 上下移動
+Servo gripper_left_right; // 左右旋轉
+Servo gripper_open_close; // 開合控制
+
+// 初始角度
+int angle_up_down = 90;    // 垂直方向初始位置
+int angle_left_right = 90; // 水平方向初始位置
+int angle_open_close = 90; // 夾爪開合初始位置
+
+// 手柄輸入範圍
+const int joystick_min = 0;   // 手柄輸入最小值
+const int joystick_max = 1023; // 手柄輸入最大值
+
+void setup() {
+  // 初始化伺服馬達
+  gripper_up_down.attach(9);    // 連接到 PWM 引腳 9
+  gripper_left_right.attach(10); // 連接到 PWM 引腳 10
+  gripper_open_close.attach(11); // 連接到 PWM 引腳 11
+
+  // 設置初始位置
+  gripper_up_down.write(angle_up_down);
+  gripper_left_right.write(angle_left_right);
+  gripper_open_close.write(angle_open_close);
+
+  // 初始化串口，用於調試
+  Serial.begin(9600);
+}
+
+void loop() {
+  // 讀取手柄輸入
+  int r2_value = analogRead(A0); // R2 控制上下移動
+  int l2_value = analogRead(A1); // L2 控制開合
+  int joystick_x = analogRead(A2); // 左搖桿 X 軸控制左右旋轉
+
+  // 映射手柄輸入到伺服馬達角度範圍
+  angle_up_down = map(r2_value, joystick_min, joystick_max, 90, 180); // R2 控制上移
+  angle_open_close = map(l2_value, joystick_min, joystick_max, 90, 0); // L2 控制開合
+  angle_left_right = map(joystick_x, joystick_min, joystick_max, 0, 180); // 左搖桿 X 軸控制旋轉
+
+  // 限制角度範圍
+  angle_up_down = constrain(angle_up_down, 0, 180);
+  angle_open_close = constrain(angle_open_close, 0, 180);
+  angle_left_right = constrain(angle_left_right, 0, 180);
+
+  // 更新伺服馬達角度
+  gripper_up_down.write(angle_up_down);
+  gripper_open_close.write(angle_open_close);
+  gripper_left_right.write(angle_left_right);
+
+  // 調試輸出
+  Serial.print("Up/Down: ");
+  Serial.print(angle_up_down);
+  Serial.print(" | Open/Close: ");
+  Serial.print(angle_open_close);
+  Serial.print(" | Left/Right: ");
+  Serial.println(angle_left_right);
+
+  delay(50); // 延遲 50ms
+}
+```
+
+---
+
+### 程式碼解釋
+
+1. **伺服馬達初始化**：
+   - 使用 `Servo` 庫控制伺服馬達，分別連接到 Arduino 的 PWM 引腳（9、10、11）。
+
+2. **手柄輸入**：
+   - 使用 `analogRead` 讀取手柄的板機（R2、L2）和搖桿（X 軸）輸入：
+     - `A0`：R2 控制上下移動。
+     - `A1`：L2 控制開合。
+     - `A2`：左搖桿 X 軸控制左右旋轉。
+
+3. **映射輸入到角度範圍**：
+   - 使用 `map` 函數將手柄輸入值（0 ~ 1023）映射到伺服馬達的角度範圍（0° ~ 180°）。
+
+4. **角度範圍限制**：
+   - 使用 `constrain` 函數將角度限制在 `0° ~ 180°`，避免伺服馬達超出物理限制。
+
+5. **伺服馬達控制**：
+   - 根據映射後的角度值，使用 `write` 函數更新伺服馬達的角度。
+
+6. **串口調試**：
+   - 使用 `Serial.print` 輸出伺服馬達的當前角度，方便調試。
+
+---
+
+### 硬體連接
+
+1. **伺服馬達**：
+   - 信號線分別連接到 Arduino 的 PWM 引腳（9、10、11）。
+   - 提供穩定的 5V 電源給伺服馬達。
+
+2. **手柄輸入**：
+   - R2、L2 和左搖桿的輸出分別連接到 Arduino 的模擬輸入引腳（A0、A1、A2）。
+
+---
+
+### 測試方式
+
+1. **硬體連接**：
+   - 按照上述連接方式將伺服馬達和手柄輸入連接到 Arduino。
+
+2. **觀察結果**：
+   - 根據手柄的板機（R2、L2）和搖桿（X 軸）輸入，觀察伺服馬達的角度變化：
+     - R2 控制上下移動。
+     - L2 控制開合。
+     - 左搖桿 X 軸控制左右旋轉。
+
+3. **串口監視器**：
+   - 打開 Arduino IDE 的串口監視器，查看伺服馬達的當前角度。
+
+---
+
+### 適用場景
+
+- **水下機器人（ROV）**：
+  - 使用手柄控制三軸夾爪進行水下物體抓取和操作。
+
+- **競賽應用**：
+  - 在 ROV 競賽中執行精確的抓取任務。
+
+
+
+＃＃＃注意事項
+- 確保手柄已正確連接並被 Arduino 識別。
+- 調整伺服馬達的電源供應，確保其能正常運＃＃＃

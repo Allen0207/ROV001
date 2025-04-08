@@ -1,0 +1,166 @@
+1. 環境設定（兩端均執行）
+   - 確保 ROV（Raspberry Pi/Jetson）和地面站（PC）使用相同的 Ubuntu 20.04，並安裝必要的工具。
+
+2. 通信方式選擇
+   **選項 1：SSH + 網路串口（推薦）**
+   - 適用場景：遠端終端控制（無 GUI）
+
+     ```bash
+     # 在 ROV 端啟動 SSH 服務（預設已安裝）
+     sudo systemctl enable ssh
+     sudo systemctl start ssh
+
+     # 從地面站 SSH 登入 ROV
+     ssh ubuntu@<ROV_IP>
+
+     # 在 ROV 上監控 Arduino 串口
+     screen /dev/ttyACM0 115200
+     ```
+
+   **選項 2：VNC 遠端桌面（可選）**
+   - 適用場景：需要 GUI 監控（如 QGroundControl）
+
+     ```bash
+     # 在 ROV 端安裝 TightVNC
+     sudo apt install tightvncserver
+
+     # 啟動 VNC Server（解析度自訂）
+     vncserver :1 -geometry 1280x800
+
+     # 在地面站使用 VNC Viewer 連接
+     # 輸入 <ROV_IP>:1
+     ```
+
+   **選項 3：ROS 通訊（進階推薦）**
+   - 適用場景：分散式系統（如感測器數據共享）
+
+     ```bash
+     # 在兩端安裝 ROS Noetic（Ubuntu 20.04 官方支援）
+     sudo sh -c 'echo "deb http://packages.ros.org/ros/ubuntu focal main" > /etc/apt/sources.list.d/ros-latest.list'
+     sudo apt-key adv --keyserver 'hkp://keyserver.ubuntu.com:80' --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+     sudo apt update
+     sudo apt install ros-noetic-desktop-full
+
+     # 初始化 ROS
+     echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc
+     source ~/.bashrc
+     ```
+
+3. 串口監控 Arduino 與 ROV 的串口通信
+   **適用場景：除錯或監控 Arduino 串口數據**
+
+   **(1) ROV 端（Ubuntu 20.04）**
+   ```python
+   # arduino_control.py
+   import serial
+   import time
+
+   arduino = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
+
+   def send_command(cmd):
+       arduino.write(f"{cmd}\n".encode())
+
+   while True:
+       send_command("THROTTLE 0.5")  # 發送指令
+       data = arduino.readline().decode().strip()  # 讀取感測器數據
+       if data:
+           print(f"Sensor: {data}")
+       time.sleep(0.02)  # 50Hz 更新率
+   ```
+
+   **(2) Arduino 端**
+   ```cpp
+   // arduino_pid_control.ino
+   #include <Servo.h>
+
+   Servo motor;
+
+   void setup() {
+       Serial.begin(115200);
+       motor.attach(9);  // PWM 引脚
+   }
+
+   void loop() {
+       // (1) 讀取上位機指令
+       if (Serial.available()) {
+           String cmd = Serial.readStringUntil('\n');
+           if (cmd.startsWith("THROTTLE")) {
+               float throttle = cmd.substring(9).toFloat();
+               motor.write(throttle * 180);  // 轉換為 PWM 信號
+           }
+       }
+
+       // (2) 回傳感測器數據
+       Serial.println("SENSOR: " + String(analogRead(A0)));
+       delay(20);  // 50Hz 更新率
+   }
+   ```
+
+ # 遠端從地面站執行 ROV 上的 Python 腳本
+ssh ubuntu@<ROV_IP> "python3 ~/arduino_control.py"  
+
+ssh -X ubuntu@<ROV_IP>
+
+以下是第四點到第六點的文字步驟整理：
+
+---
+
+### 4. 地面站監控與控制
+1. 從地面站遠端執行 ROV 上的 Python 腳本：
+   - 使用 SSH 連接到 ROV：
+     ```bash
+     ssh ubuntu@<ROV_IP> "python3 ~/arduino_control.py"
+     ```
+   - 或者，使用 SSH 搭配 X11 Forwarding 來執行 GUI 應用程式：
+     ```bash
+     ssh -X ubuntu@<ROV_IP>
+     ```
+
+---
+
+### 5. 常見問題
+1. **SSH 連線問題**：
+   - 確認 ROV 的 IP 地址是否正確。
+   - 確認 ROV 上的 SSH 服務是否正在運行。
+   - 檢查防火牆設置是否允許 SSH 連接。
+
+2. **VNC 連線問題**：
+   - 確認 ROV 上的 VNC Server 是否正在運行。
+   - 檢查防火牆設置是否允許 VNC 連接。
+   - 可改用 SSH 搭配 X11 Forwarding：
+     ```bash
+     ssh -X ubuntu@<ROV_IP>
+     ```
+
+3. **ROS 通訊問題**：
+   - 確認兩端的 ROS Master URI 是否正確配置。
+   - 確保網路連接穩定。
+
+4. **無法訪問 /dev/ttyACM0（權限問題）**：
+   - 將用戶加入串口群組：
+     ```bash
+     sudo usermod -aG dialout $USER
+     ```
+   - 重啟系統：
+     ```bash
+     sudo reboot
+     ```
+
+---
+
+### 6. 總結
+1. **環境一致性**：
+   - 確保 ROV 和地面站均使用 Ubuntu 20.04，以避免相容性問題。
+
+2. **通訊選項**：
+   - **SSH + 串口**：最簡單且低延遲。
+   - **VNC**：適合 GUI 監控（非即時控制）。
+   - **ROS**：適合分散式系統（進階推薦）。
+
+3. **Arduino 的角色**：
+   - 負責即時控制（PID）和 PWM 輸出。
+   - 高階算法由 Ubuntu 處理。
+
+4. **開發流程**：
+   - 在地面站測試。
+   - 無需修改即可直接部署到 ROV。

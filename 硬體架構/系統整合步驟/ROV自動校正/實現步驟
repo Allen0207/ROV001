@@ -1,0 +1,219 @@
+核心功能實現
+1. IMU 自動校正模組
+class IMUAutoCalibrator:
+    def __init__(self):
+        self.gyro_bias = np.zeros(3)
+        self.accel_bias = np.zeros(3)
+        self.mag_bias = np.zeros(3)
+        self.calibration_steps = 1000
+        self.calibration_count = 0
+
+    def collect_data(self, raw_gyro, raw_accel, raw_mag):
+        if self.calibration_count < self.calibration_steps:
+            self.gyro_bias += raw_gyro
+            self.accel_bias += raw_accel
+            self.mag_bias += raw_mag
+            self.calibration_count += 1
+
+            if self.calibration_count == self.calibration_steps:
+                self._calculate_bias()
+                self._save_calibration()
+                return True
+        return False
+
+    def _calculate_bias(self):
+        self.gyro_bias /= self.calibration_steps
+        self.accel_bias /= self.calibration_steps
+        self.mag_bias /= self.calibration_steps
+        
+        # 重力向量修正
+        gravity_norm = np.linalg.norm(self.accel_bias)
+        self.accel_bias *= 9.80665 / gravity_norm
+
+    def apply_calibration(self, raw_data):
+        calibrated = {
+            'gyro': raw_data['gyro'] - self.gyro_bias,
+            'accel': raw_data['accel'] - self.accel_bias,
+            'mag': raw_data['mag'] - self.mag_bias
+        }
+        return calibrated
+
+    def _save_calibration(self):
+        np.savez('imu_calibration.npz',
+                 gyro_bias=self.gyro_bias,
+                 accel_bias=self.accel_bias,
+                 mag_bias=self.mag_bias)
+
+
+
+2. ESC 自動校正模組 (Arduino端)
+class ESCAutoCalibrator {
+public:
+    enum CalibrationState { IDLE, MAX_PULSE, MIN_PULSE, NEUTRAL };
+    
+    void beginCalibration() {
+        state = MAX_PULSE;
+        startTime = millis();
+    }
+
+    void update() {
+        switch(state) {
+            case MAX_PULSE:
+                setAllPWM(2000);
+                if(millis() - startTime > 5000) {
+                    state = MIN_PULSE;
+                    startTime = millis();
+                }
+                break;
+                
+            case MIN_PULSE:
+                setAllPWM(1000);
+                if(millis() - startTime > 5000) {
+                    state = NEUTRAL;
+                    startTime = millis();
+                }
+                break;
+                
+            case NEUTRAL:
+                setAllPWM(1500);
+                calibrationDone = true;
+                state = IDLE;
+                break;
+        }
+    }
+
+private:
+    void setAllPWM(int value) {
+        for(int pin : thrusterPins) {
+            analogWrite(pin, map(value,1000,2000,0,255));
+        }
+    }
+    
+    CalibrationState state = IDLE;
+    unsigned long startTime;
+    bool calibrationDone = false;
+};
+
+
+3. 控制參數自適應模組 (pi)
+    class AdaptiveController:
+    def __init__(self):
+        self.Kp = 0.5
+        self.Ki = 0.01
+        self.Kd = 0.05
+        self.error_history = []
+        self.adaptation_interval = 100  # 每100次控制循環調整一次
+
+    def update_parameters(self, current_error):
+        self.error_history.append(current_error)
+        
+        if len(self.error_history) >= self.adaptation_interval:
+            # 計算性能指標
+            avg_error = np.mean(np.abs(self.error_history))
+            oscillation = np.std(self.error_history)
+            
+            # 根據規則調整參數
+            if oscillation > 0.1 * avg_error:
+                self.Kp *= 0.9
+                self.Ki *= 0.8
+                self.Kd *= 1.1
+            elif avg_error > 0.5:
+                self.Kp *= 1.1
+                self.Ki *= 0.9
+                self.Kd *= 0.9
+            
+            # 參數範圍限制
+            self.Kp = np.clip(self.Kp, 0.1, 2.0)
+            self.Ki = np.clip(self.Ki, 0.001, 0.5)
+            self.Kd = np.clip(self.Kd, 0.01, 1.0)
+            
+            self.error_history = []
+
+
+ROS 2 整合服務
+1. 校正服務定義 (srv/AutoCalibrate.srv)
+
+bool enable_calibration
+---
+bool calibration_result
+string status_message
+
+2. 校正服務節點
+class AutoCalibrationServer(Node):
+    def __init__(self):
+        super().__init__('auto_calibration_server')
+        
+        # 服務定義
+        self.srv = self.create_service(
+            AutoCalibrate,
+            'auto_calibrate',
+            self.calibration_callback)
+        
+        # 初始化校正模組
+        self.imu_calibrator = IMUAutoCalibrator()
+        self.controller_adaptor = AdaptiveController()
+        
+        # 訂閱相關話題
+        self.imu_sub = self.create_subscription(
+            Imu, 
+            '/imu/raw',
+            self.imu_callback,
+            10)
+            
+        self.esc_calibrator = ESCAutoCalibrator()
+
+    def imu_callback(self, msg):
+        if self.calibrating_imu:
+            raw_data = self._parse_imu_data(msg)
+            self.imu_calibrator.collect_data(raw_data)
+
+    def calibration_callback(self, request, response):
+        try:
+            if request.enable_calibration:
+                self.get_logger().info("開始全系統自動校正流程")
+                
+                # Step 1: ESC 校正
+                self._esc_calibration()
+                
+                # Step 2: IMU 校正
+                self._imu_calibration()
+                
+                # Step 3: 控制參數自適應
+                self._controller_adaptation()
+                
+                response.calibration_result = True
+                response.status_message = "校正成功完成"
+            else:
+                response.calibration_result = False
+                response.status_message = "校正已取消"
+                
+        except Exception as e:
+            response.calibration_result = False
+            response.status_message = f"校正失敗: {str(e)}"
+            
+        return response
+
+    def _esc_calibration(self):
+        self.get_logger().info("開始 ESC 自動校正")
+        self.esc_calibrator.beginCalibration()
+        while not self.esc_calibrator.calibrationDone:
+            self.esc_calibrator.update()
+            time.sleep(0.1)
+
+    def _imu_calibration(self):
+        self.get_logger().info("開始 IMU 自動校正")
+        self.calibrating_imu = True
+        start_time = time.time()
+        while not self.imu_calibrator.calibration_complete:
+            if time.time() - start_time > 30:
+                raise TimeoutError("IMU 校正超時")
+            time.sleep(0.1)
+        self.calibrating_imu = False
+
+    def _controller_adaptation(self):
+        self.get_logger().info("進行控制參數自適應調整")
+        # 在此實現參數調整測試流程
+        # 例如讓 ROV 執行標準運動模式來優化參數
+        # 需要與控制節點深度整合
+
+

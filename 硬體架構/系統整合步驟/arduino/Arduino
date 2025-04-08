@@ -1,0 +1,170 @@
+步驟2：Arduino 控制程式碼 (rov_arduino_control.ino)
+#include <ros.h>
+#include <std_msgs/Float32MultiArray.h>
+#include <Wire.h>
+
+// PWM 輸出引腳配置
+const int thrusterPins[] = {3, 5, 6, 9, 10, 11}; // 對應 6 個推進器
+
+// 水壓感測器地址與數據
+const int pressureSensorAddress = 0x76; // 假設水壓感測器的 I2C 地址
+float pressureValue = 0.0;
+
+ros::NodeHandle nh;
+
+// ROS 訂閱者：接收推進器 PWM 指令
+void pwmCallback(const std_msgs::Float32MultiArray& cmd) {
+  // 確保接收數據長度正確
+  if (cmd.data_length == 6) {
+    for (int i = 0; i < 6; i++) {
+      int pwm = (int)cmd.data[i];
+      pwm = constrain(pwm, 1000, 2000); // ESC 安全範圍
+      analogWrite(thrusterPins[i], map(pwm, 1000, 2000, 0, 255));
+    }
+  }
+}
+ros::Subscriber<std_msgs::Float32MultiArray> sub("cmd_pwm", &pwmCallback);
+
+// ROS 發布者：發布水壓數據
+std_msgs::Float32 pressureMsg;
+ros::Publisher pressurePub("pressure_data", &pressureMsg);
+
+void setup() {
+  // 初始化 PWM 引腳
+  for (int pin : thrusterPins) {
+    pinMode(pin, OUTPUT);
+    analogWrite(pin, 127); // 初始中性點 (1500us)
+  }
+
+  // 初始化 I2C
+  Wire.begin();
+
+  // 初始化 ROS 節點
+  nh.initNode();
+  nh.subscribe(sub);
+  nh.advertise(pressurePub);
+}
+
+void loop() {
+  // 讀取水壓感測器數據
+  pressureValue = readPressureSensor();
+  pressureMsg.data = pressureValue;
+  pressurePub.publish(&pressureMsg);
+
+  // 處理 ROS 通訊
+  nh.spinOnce();
+  delay(10);
+}
+
+// 讀取水壓感測器數據的函數
+float readPressureSensor() {
+  Wire.beginTransmission(pressureSensorAddress);
+  Wire.write(0x00); // 假設讀取命令
+  Wire.endTransmission();
+  Wire.requestFrom(pressureSensorAddress, 2); // 假設返回 2 個字節數據
+
+  if (Wire.available() == 2) {
+    int highByte = Wire.read();
+    int lowByte = Wire.read();
+    int rawPressure = (highByte << 8) | lowByte;
+    return rawPressure / 100.0; // 假設轉換為壓力值（單位：bar）
+  }
+
+  return 0.0; // 如果讀取失敗，返回 0
+}
+
+
+以下是加入 I2C 水壓感測器數值資訊的完整程式碼：
+
+```cpp
+; filepath: /workspaces/rov/Rov/硬體架構/系統整合步驟/Arduino
+#include <ros.h>
+#include <std_msgs/Float32MultiArray.h>
+#include <Wire.h>
+
+// PWM 輸出引腳配置
+const int thrusterPins[] = {3, 5, 6, 9, 10, 11}; // 對應 6 個推進器
+
+// 水壓感測器地址與數據
+const int pressureSensorAddress = 0x76; // 假設水壓感測器的 I2C 地址
+float pressureValue = 0.0;
+
+ros::NodeHandle nh;
+
+// ROS 訂閱者：接收推進器 PWM 指令
+void pwmCallback(const std_msgs::Float32MultiArray& cmd) {
+  // 確保接收數據長度正確
+  if (cmd.data_length == 6) {
+    for (int i = 0; i < 6; i++) {
+      int pwm = (int)cmd.data[i];
+      pwm = constrain(pwm, 1000, 2000); // ESC 安全範圍
+      analogWrite(thrusterPins[i], map(pwm, 1000, 2000, 0, 255));
+    }
+  }
+}
+ros::Subscriber<std_msgs::Float32MultiArray> sub("cmd_pwm", &pwmCallback);
+
+// ROS 發布者：發布水壓數據
+std_msgs::Float32 pressureMsg;
+ros::Publisher pressurePub("pressure_data", &pressureMsg);
+
+void setup() {
+  // 初始化 PWM 引腳
+  for (int pin : thrusterPins) {
+    pinMode(pin, OUTPUT);
+    analogWrite(pin, 127); // 初始中性點 (1500us)
+  }
+
+  // 初始化 I2C
+  Wire.begin();
+
+  // 初始化 ROS 節點
+  nh.initNode();
+  nh.subscribe(sub);
+  nh.advertise(pressurePub);
+}
+
+void loop() {
+  // 讀取水壓感測器數據
+  pressureValue = readPressureSensor();
+  pressureMsg.data = pressureValue;
+  pressurePub.publish(&pressureMsg);
+
+  // 處理 ROS 通訊
+  nh.spinOnce();
+  delay(10);
+}
+
+// 讀取水壓感測器數據的函數
+float readPressureSensor() {
+  Wire.beginTransmission(pressureSensorAddress);
+  Wire.write(0x00); // 假設讀取命令
+  Wire.endTransmission();
+  Wire.requestFrom(pressureSensorAddress, 2); // 假設返回 2 個字節數據
+
+  if (Wire.available() == 2) {
+    int highByte = Wire.read();
+    int lowByte = Wire.read();
+    int rawPressure = (highByte << 8) | lowByte;
+    return rawPressure / 100.0; // 假設轉換為壓力值（單位：bar）
+  }
+
+  return 0.0; // 如果讀取失敗，返回 0
+}
+```
+
+
+
+
+### 修改內容：
+1. **新增水壓感測器的 I2C 通訊**：
+   - 定義水壓感測器的 I2C 地址 (`pressureSensorAddress`)。
+   - 新增函數 `readPressureSensor()` 用於讀取水壓數據。
+
+2. **新增 ROS 發布者**：
+   - 定義 `pressurePub`，將水壓數據發布到 ROS 話題 `pressure_data`。
+
+3. **在 `loop()` 中讀取水壓數據並發布**：
+   - 每次循環讀取水壓感測器數據，並通過 ROS 發布。
+
+這樣的程式碼可以同時控制推進器並發布水壓感測器的數據，方便整合到 ROS 系統中。
